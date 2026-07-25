@@ -1,0 +1,36 @@
+{
+  "expo": {
+    "name": "MagMed",
+    "slug": "magmed",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "light",
+    "newArchEnabled": true,
+    "ios": {
+      "supportsTablet": false,
+      "bundleIdentifier": "com.tjc.magmed",
+      "deploymentTarget": "16.4",
+      "infoPlist": {
+        "NSCameraUsageDescription": "MagMed uses the camera to photograph and read medicine labels.",
+        "NSPhotoLibraryUsageDescription": "MagMed lets you choose a medicine label photo to read."
+      },
+      "appleTeamId": "WNJBH4D37A"
+    },
+    "plugins": [
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "Take a medicine label photo for MagMed to read.",
+          "recordAudioAndroid": false
+        }
+      ],
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "Choose a medicine label photo for MagMed to read.",
+          "cameraPermission": "Take a medicine label photo for MagMed to read."
+        }
+      ]
+    ]
+  }
+}

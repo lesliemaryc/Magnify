@@ -1,0 +1,308 @@
+diff --git a/node_modules/expo-camera/build/Camera.types.d.ts b/node_modules/expo-camera/build/Camera.types.d.ts
+index 0ee50ec..208ee55 100644
+--- a/node_modules/expo-camera/build/Camera.types.d.ts
++++ b/node_modules/expo-camera/build/Camera.types.d.ts
+@@ -348,6 +348,11 @@ export type CameraViewProps = ViewProps & {
+      * @platform ios
+      */
+     autofocus?: FocusMode;
++    /**
++     * A normalized preview coordinate to focus and expose at.
++     * @platform ios
++     */
++    focusPoint?: Point;
+     /**
+      * A boolean that determines whether the camera should be active.
+      * Useful in situations where the camera may not have unmounted but you still want to stop the camera session.
+@@ -492,6 +497,7 @@ export type CameraNativeProps = {
+     enableTorch?: boolean;
+     animateShutter?: boolean;
+     autoFocus?: FocusMode;
++    focusPoint?: Point;
+     mute?: boolean;
+     zoom?: number;
+     ratio?: CameraRatio;
+diff --git a/node_modules/expo-camera/ios/CameraViewModule.swift b/node_modules/expo-camera/ios/CameraViewModule.swift
+index cccd73f..342ac2d 100644
+--- a/node_modules/expo-camera/ios/CameraViewModule.swift
++++ b/node_modules/expo-camera/ios/CameraViewModule.swift
+@@ -210,6 +210,12 @@ public final class CameraViewModule: Module, ScannerResultHandler {
+         }
+       }
+ 
++      Prop("focusPoint") { (view, point: CGPoint?) in
++        if let point {
++          view.focus(at: point)
++        }
++      }
++
+       Prop("responsiveOrientationWhenOrientationLocked") { (view, responsiveOrientation: Bool?) in
+         if let responsiveOrientation, view.responsiveWhenOrientationLocked != responsiveOrientation {
+           view.responsiveWhenOrientationLocked = responsiveOrientation
+diff --git a/node_modules/expo-camera/ios/Common/DeviceDiscovery.swift b/node_modules/expo-camera/ios/Common/DeviceDiscovery.swift
+index 89fdca0..46e7b2e 100644
+--- a/node_modules/expo-camera/ios/Common/DeviceDiscovery.swift
++++ b/node_modules/expo-camera/ios/Common/DeviceDiscovery.swift
+@@ -107,13 +107,22 @@ class DeviceDiscovery {
+   }
+ 
+   var defaultBackCamera: AVCaptureDevice? {
+-    if let standardBack = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: .back) {
+-      if self.backCameraLenses.contains(standardBack) {
+-        return standardBack
++    // Prefer a virtual multi-camera device. It can switch between wide and
++    // ultra-wide constituents for close-focus subjects without the app forcing
++    // a permanently softer physical lens.
++    let virtualTypes: [AVCaptureDevice.DeviceType] = [
++      .builtInTripleCamera,
++      .builtInDualWideCamera,
++      .builtInDualCamera
++    ]
++    for type in virtualTypes {
++      if let camera = AVCaptureDevice.default(type, for: .video, position: .back),
++         self.backCameraLenses.contains(camera) {
++        return camera
+       }
+     }
+ 
+-    // iOS 17+: Check system preferred camera
++    // If no virtual device is available, respect the camera selected by iOS.
+     if #available(iOS 17.0, *) {
+       if let preferred = AVCaptureDevice.systemPreferredCamera, preferred.position == .back {
+         if self.backCameraLenses.contains(preferred) {
+@@ -122,6 +131,12 @@ class DeviceDiscovery {
+       }
+     }
+ 
++    if let standardBack = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: .back) {
++      if self.backCameraLenses.contains(standardBack) {
++        return standardBack
++      }
++    }
++
+     // Check standard default video device
+     if let standardDefault = AVCaptureDevice.default(for: .video), standardDefault.position == .back {
+       if self.backCameraLenses.contains(standardDefault) {
+diff --git a/node_modules/expo-camera/ios/Current/CameraPhotoCapture.swift b/node_modules/expo-camera/ios/Current/CameraPhotoCapture.swift
+index fc9a9bb..0923ef9 100644
+--- a/node_modules/expo-camera/ios/Current/CameraPhotoCapture.swift
++++ b/node_modules/expo-camera/ios/Current/CameraPhotoCapture.swift
+@@ -102,7 +102,7 @@ class CameraPhotoCapture: NSObject, AVCapturePhotoCaptureDelegate {
+         photoSettings.isHighResolutionPhotoEnabled = true
+       }
+ 
+-      photoSettings.photoQualityPrioritization = .balanced
++      photoSettings.photoQualityPrioritization = .quality
+ 
+       photoOutput.capturePhoto(with: photoSettings, delegate: self)
+     }
+diff --git a/node_modules/expo-camera/ios/Current/CameraSessionManager.swift b/node_modules/expo-camera/ios/Current/CameraSessionManager.swift
+index 403e033..135796b 100644
+--- a/node_modules/expo-camera/ios/Current/CameraSessionManager.swift
++++ b/node_modules/expo-camera/ios/Current/CameraSessionManager.swift
+@@ -209,6 +209,63 @@ class CameraSessionManager: NSObject, DeviceDiscoveryDelegate {
+     }
+   }
+ 
++  func focus(at point: CGPoint) {
++    guard let device = captureDeviceInput?.device else {
++      return
++    }
++
++    do {
++      try device.lockForConfiguration()
++      if device.isFocusPointOfInterestSupported && device.isFocusModeSupported(.autoFocus) {
++        if device.isAutoFocusRangeRestrictionSupported {
++          device.autoFocusRangeRestriction = .near
++        }
++        if device.isSmoothAutoFocusSupported {
++          device.isSmoothAutoFocusEnabled = false
++        }
++        device.focusPointOfInterest = point
++        device.focusMode = .autoFocus
++      }
++      if device.isExposurePointOfInterestSupported && device.isExposureModeSupported(.autoExpose) {
++        device.exposurePointOfInterest = point
++        device.exposureMode = .autoExpose
++      }
++      device.unlockForConfiguration()
++    } catch {
++      log.info("\(#function): \(error.localizedDescription)")
++      return
++    }
++
++    // Keep tracking focus at the selected point after the initial lock.
++    sessionQueue.asyncAfter(deadline: .now() + 1.2) { [weak self] in
++      guard let device = self?.captureDeviceInput?.device,
++            device.isFocusModeSupported(.continuousAutoFocus) else {
++        return
++      }
++      do {
++        try device.lockForConfiguration()
++        device.focusMode = .continuousAutoFocus
++        device.unlockForConfiguration()
++      } catch {
++        self?.log.info("\(#function): \(error.localizedDescription)")
++      }
++    }
++  }
++
++  func waitForFocusAndExposureToSettle() async {
++    guard let device = captureDeviceInput?.device else {
++      return
++    }
++    // Do not capture a high-resolution frame while the lens or exposure is
++    // still moving. The upper bound keeps the shutter responsive in low light.
++    for _ in 0..<30 {
++      if !device.isAdjustingFocus && !device.isAdjustingExposure {
++        return
++      }
++      try? await Task.sleep(nanoseconds: 50_000_000)
++    }
++  }
++
+   func updateZoom() {
+     guard let device = captureDeviceInput?.device, let delegate else {
+       return
+@@ -351,6 +408,28 @@ class CameraSessionManager: NSObject, DeviceDiscoveryDelegate {
+       if session.canAddInput(deviceInput) {
+         session.addInput(deviceInput)
+         captureDeviceInput = deviceInput
++        do {
++          try device.lockForConfiguration()
++          if device.isFocusModeSupported(.continuousAutoFocus) {
++            device.focusMode = .continuousAutoFocus
++          }
++          if device.isSmoothAutoFocusSupported {
++            device.isSmoothAutoFocusEnabled = false
++          }
++          if device.isVirtualDevice {
++            device.fallbackPrimaryConstituentDevices = device.supportedFallbackPrimaryConstituentDevices
++            device.setPrimaryConstituentDeviceSwitchingBehavior(
++              .auto,
++              restrictedSwitchingBehaviorConditions: []
++            )
++          }
++          if device.isLowLightBoostSupported {
++            device.automaticallyEnablesLowLightBoostWhenAvailable = true
++          }
++          device.unlockForConfiguration()
++        } catch {
++          log.info("\(#function): \(error.localizedDescription)")
++        }
+         updateZoom()
+       }
+     } catch {
+@@ -374,11 +453,24 @@ class CameraSessionManager: NSObject, DeviceDiscoveryDelegate {
+     }
+     photoOutput.isResponsiveCaptureEnabled = true
+     if photoOutput.isFastCapturePrioritizationSupported {
+-      photoOutput.isFastCapturePrioritizationEnabled = true
++      photoOutput.isFastCapturePrioritizationEnabled = false
+     }
+     photoOutput.isAutoDeferredPhotoDeliveryEnabled = false
+   }
+ 
++  private func configureMaximumPhotoResolution(_ photoOutput: AVCapturePhotoOutput, device: AVCaptureDevice) {
++    if #available(iOS 16.0, *) {
++      let maximumDimensions = device.activeFormat.supportedMaxPhotoDimensions.max { first, second in
++        Int64(first.width) * Int64(first.height) < Int64(second.width) * Int64(second.height)
++      }
++      if let maximumDimensions {
++        photoOutput.maxPhotoDimensions = maximumDimensions
++      }
++    } else {
++      photoOutput.isHighResolutionCaptureEnabled = true
++    }
++  }
++
+   private func startSession() {
+     guard hasAvailableCameraDevice else {
+       return
+@@ -398,6 +490,7 @@ class CameraSessionManager: NSObject, DeviceDiscoveryDelegate {
+ 
+     let photoOutput = AVCapturePhotoOutput()
+     photoOutput.isLivePhotoCaptureEnabled = false
++    photoOutput.maxPhotoQualityPrioritization = .quality
+     session.beginConfiguration()
+     if session.canAddOutput(photoOutput) {
+       session.addOutput(photoOutput)
+@@ -409,6 +502,10 @@ class CameraSessionManager: NSObject, DeviceDiscoveryDelegate {
+     : delegate.pictureSize.toCapturePreset()
+     updateSessionPreset(preset: preset, withSessionConfiguration: false)
+ 
++    if let device = captureDeviceInput?.device {
++      configureMaximumPhotoResolution(photoOutput, device: device)
++    }
++
+     configureResponsiveCapture(photoOutput)
+ 
+     session.commitConfiguration()
+diff --git a/node_modules/expo-camera/ios/Current/CameraView.swift b/node_modules/expo-camera/ios/Current/CameraView.swift
+index 7bf1b37..ff771f0 100644
+--- a/node_modules/expo-camera/ios/Current/CameraView.swift
++++ b/node_modules/expo-camera/ios/Current/CameraView.swift
+@@ -190,6 +190,21 @@ public class CameraView: ExpoView, EXAppLifecycleListener, EXCameraInterface, Ca
+     previewLayer.needsDisplayOnBoundsChange = true
+   }
+ 
++  func focus(at normalizedPoint: CGPoint) {
++    let clampedPoint = CGPoint(
++      x: min(max(normalizedPoint.x, 0), 1),
++      y: min(max(normalizedPoint.y, 0), 1)
++    )
++    let layerPoint = CGPoint(
++      x: clampedPoint.x * bounds.width,
++      y: clampedPoint.y * bounds.height
++    )
++    let devicePoint = previewLayer.captureDevicePointConverted(fromLayerPoint: layerPoint)
++    sessionQueue.async { [weak self] in
++      self?.sessionManager.focus(at: devicePoint)
++    }
++  }
++
+   func startSessionIfNeeded() {
+     guard !didStartSession else {
+       return
+@@ -290,6 +305,7 @@ public class CameraView: ExpoView, EXAppLifecycleListener, EXCameraInterface, Ca
+     guard let photoOutput = sessionManager.currentPhotoOutput else {
+       throw CameraOutputNotReadyException()
+     }
++    await sessionManager.waitForFocusAndExposureToSettle()
+     return try await photoCapture.takePictureRef(options: options, photoOutput: photoOutput)
+   }
+ 
+@@ -297,6 +313,7 @@ public class CameraView: ExpoView, EXAppLifecycleListener, EXCameraInterface, Ca
+     guard let photoOutput = sessionManager.currentPhotoOutput else {
+       throw CameraOutputNotReadyException()
+     }
++    await sessionManager.waitForFocusAndExposureToSettle()
+     return try await photoCapture.takePicturePromise(options: options, photoOutput: photoOutput)
+   }
+ 
+diff --git a/node_modules/expo-camera/src/Camera.types.ts b/node_modules/expo-camera/src/Camera.types.ts
+index 7cf0a07..7a7b821 100644
+--- a/node_modules/expo-camera/src/Camera.types.ts
++++ b/node_modules/expo-camera/src/Camera.types.ts
+@@ -383,6 +383,13 @@ export type CameraViewProps = ViewProps & {
+    * @platform ios
+    */
+   autofocus?: FocusMode;
++  /**
++   * A normalized preview coordinate to focus and expose at. The top-left of
++   * the preview is `{ x: 0, y: 0 }` and the bottom-right is `{ x: 1, y: 1 }`.
++   * Updating this value starts a new autofocus cycle at that point.
++   * @platform ios
++   */
++  focusPoint?: Point;
+   /**
+    * A boolean that determines whether the camera should be active.
+    * Useful in situations where the camera may not have unmounted but you still want to stop the camera session.
+@@ -525,6 +532,7 @@ export type CameraNativeProps = {
+   enableTorch?: boolean;
+   animateShutter?: boolean;
+   autoFocus?: FocusMode;
++  focusPoint?: Point;
+   mute?: boolean;
+   zoom?: number;
+   ratio?: CameraRatio;
