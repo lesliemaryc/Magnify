@@ -27,7 +27,7 @@
 		<dict>
 			<key>CFBundleURLSchemes</key>
 			<array>
-				<string>com.tjc.magmed</string>
+				<string>com.yerimlab.magmed</string>
 			</array>
 		</dict>
 	</array>
@@ -37,6 +37,8 @@
 	<string>12.0</string>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
+	<key>ITSAppUsesNonExemptEncryption</key>
+	<false/>
 	<key>NSAppTransportSecurity</key>
 	<dict>
 		<key>NSAllowsArbitraryLoads</key>

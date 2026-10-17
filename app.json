@@ -8,10 +8,11 @@
     "newArchEnabled": true,
     "ios": {
       "supportsTablet": false,
-      "bundleIdentifier": "com.tjc.magmed",
+      "bundleIdentifier": "com.yerimlab.magmed",
       "deploymentTarget": "16.4",
       "infoPlist": {
         "NSCameraUsageDescription": "MagMed uses the camera to photograph and read medicine labels.",
+        "ITSAppUsesNonExemptEncryption": false,
         "NSPhotoLibraryUsageDescription": "MagMed lets you choose a medicine label photo to read."
       },
       "appleTeamId": "WNJBH4D37A"

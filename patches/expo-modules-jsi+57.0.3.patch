@@ -1,0 +1,32 @@
+diff --git a/apple/scripts/build-xcframework.sh b/apple/scripts/build-xcframework.sh
+--- a/apple/scripts/build-xcframework.sh
++++ b/apple/scripts/build-xcframework.sh
+@@ -199,7 +199,12 @@ build_slice() {
+     env_args+=(DEVELOPER_DIR="$DEVELOPER_DIR")
+   fi
+ 
+-  (cd "$PACKAGE_DIR" && env -i "${env_args[@]}" \
++  # Xcode 27 can print a Swift driver "error:" diagnostic even when this
++  # nested build succeeds. The parent Xcode build treats any such line as a
++  # script failure, so only forward the nested log when its exit status fails.
++  local build_log
++  build_log=$(mktemp "${TMPDIR:-/tmp}/expo-modules-jsi-build.XXXXXX")
++  if (cd "$PACKAGE_DIR" && env -i "${env_args[@]}" \
+     xcodebuild \
+     build \
+     -scheme "$PACKAGE_NAME" \
+@@ -217,7 +222,13 @@ build_slice() {
+     DEBUG_INFORMATION_FORMAT=dwarf-with-dsym \
+     COMPILER_INDEX_STORE_ENABLE=NO \
+     SWIFT_COMPILATION_MODE=wholemodule \
+-  )
++  ) >"$build_log" 2>&1; then
++    rm -f "$build_log"
++  else
++    cat "$build_log"
++    rm -f "$build_log"
++    return 1
++  fi
+ 
+   local product_path="${BUILD_PRODUCTS_PATH}/${build_dir_name}"
+   local framework_src="${product_path}/PackageFrameworks/${PACKAGE_NAME}.framework"

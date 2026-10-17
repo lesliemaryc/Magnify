@@ -232,17 +232,8 @@ function MagMedApp() {
 
     try {
       const result: any = await TextRecognition.recognize(uri);
-      const found = extractWordBoxes(result);
       const recognizedText = result.text ?? '';
       setFullText(recognizedText);
-      setWords(found);
-      const readyTranslations: Record<string, string> = {};
-      found.forEach((word) => {
-        const key = translationKey(word.text);
-        const dictionaryKey = word.text.toLowerCase().replace(/[^a-z]/g, '');
-        if (key && KOREAN_WORDS[dictionaryKey]) readyTranslations[translationCacheKey(key, 'ko')] = KOREAN_WORDS[dictionaryKey];
-      });
-      setTranslations(readyTranslations);
       if (isGeminiConfigured && recognizedText.trim()) {
         const sourceSections = summarizeLabel(recognizedText);
         (['ko', 'es', 'ja'] as Array<Exclude<SummaryLanguage, 'en'>>).forEach((language) => {
@@ -254,6 +245,15 @@ function MagMedApp() {
             .catch((reason) => console.warn(`Background ${language} Easy Read translation unavailable.`, reason));
         });
       }
+      const found = extractWordBoxes(result);
+      setWords(found);
+      const readyTranslations: Record<string, string> = {};
+      found.forEach((word) => {
+        const key = translationKey(word.text);
+        const dictionaryKey = word.text.toLowerCase().replace(/[^a-z]/g, '');
+        if (key && KOREAN_WORDS[dictionaryKey]) readyTranslations[translationCacheKey(key, 'ko')] = KOREAN_WORDS[dictionaryKey];
+      });
+      setTranslations(readyTranslations);
       if (!result.text?.trim()) {
         setError('No readable text was found. Try a brighter, sharper photo.');
       }
